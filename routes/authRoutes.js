@@ -5,6 +5,29 @@ const connectDB = require("../utils/db");
 
 const router = express.Router();
 
+const createToken = (user) => {
+    return jwt.sign(
+        {
+            id: user._id.toString(),
+            email: user.email,
+            role: user.role,
+        },
+        process.env.JWT_SECRET,
+        {
+            expiresIn: "7d",
+        }
+    );
+};
+
+const formatUser = (user) => ({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    profileImage: user.profileImage,
+    role: user.role,
+    credits: user.credits,
+});
+
 router.post("/register", async (req, res) => {
     try {
         const {
@@ -21,6 +44,16 @@ router.post("/register", async (req, res) => {
             });
         }
 
+        const trimmedName = name.trim();
+        const normalizedEmail = email.trim().toLowerCase();
+        const trimmedProfileImage = profileImage.trim();
+
+        if (!trimmedName) {
+            return res.status(400).json({
+                message: "Name is required.",
+            });
+        }
+
         if (!["supporter", "creator"].includes(role)) {
             return res.status(400).json({
                 message: "Invalid role.",
@@ -29,7 +62,7 @@ router.post("/register", async (req, res) => {
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        if (!emailRegex.test(email)) {
+        if (!emailRegex.test(normalizedEmail)) {
             return res.status(400).json({
                 message: "Please provide a valid email address.",
             });
@@ -41,11 +74,19 @@ router.post("/register", async (req, res) => {
             });
         }
 
+        if (!process.env.JWT_SECRET) {
+            console.error("JWT_SECRET is missing from environment variables.");
+
+            return res.status(500).json({
+                message: "Server authentication configuration is missing.",
+            });
+        }
+
         const db = await connectDB();
         const usersCollection = db.collection("users");
 
         const existingUser = await usersCollection.findOne({
-            email: email.toLowerCase(),
+            email: normalizedEmail,
         });
 
         if (existingUser) {
@@ -59,9 +100,9 @@ router.post("/register", async (req, res) => {
         const credits = role === "supporter" ? 50 : 20;
 
         const newUser = {
-            name: name.trim(),
-            email: email.toLowerCase(),
-            profileImage: profileImage.trim(),
+            name: trimmedName,
+            email: normalizedEmail,
+            profileImage: trimmedProfileImage,
             password: hashedPassword,
             role,
             credits,
@@ -70,26 +111,26 @@ router.post("/register", async (req, res) => {
 
         const result = await usersCollection.insertOne(newUser);
 
-        res.status(201).json({
+        const createdUser = {
+            ...newUser,
+            _id: result.insertedId,
+        };
+
+        const token = createToken(createdUser);
+
+        return res.status(201).json({
             message: "Registration successful.",
-            user: {
-                id: result.insertedId,
-                name: newUser.name,
-                email: newUser.email,
-                profileImage: newUser.profileImage,
-                role: newUser.role,
-                credits: newUser.credits,
-            },
+            token,
+            user: formatUser(createdUser),
         });
     } catch (error) {
         console.error("Registration error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             message: "Something went wrong during registration.",
         });
     }
 });
-
 
 router.post("/login", async (req, res) => {
     try {
@@ -101,11 +142,21 @@ router.post("/login", async (req, res) => {
             });
         }
 
+        if (!process.env.JWT_SECRET) {
+            console.error("JWT_SECRET is missing from environment variables.");
+
+            return res.status(500).json({
+                message: "Server authentication configuration is missing.",
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
         const db = await connectDB();
         const usersCollection = db.collection("users");
 
         const user = await usersCollection.findOne({
-            email: email.toLowerCase(),
+            email: normalizedEmail,
         });
 
         if (!user) {
@@ -125,34 +176,17 @@ router.post("/login", async (req, res) => {
             });
         }
 
-        const token = jwt.sign(
-            {
-                id: user._id.toString(),
-                email: user.email,
-                role: user.role,
-            },
-            process.env.JWT_SECRET,
-            {
-                expiresIn: "7d",
-            }
-        );
+        const token = createToken(user);
 
-        res.status(200).json({
+        return res.status(200).json({
             message: "Login successful.",
             token,
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                profileImage: user.profileImage,
-                role: user.role,
-                credits: user.credits,
-            },
+            user: formatUser(user),
         });
     } catch (error) {
         console.error("Login error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             message: "Something went wrong during login.",
         });
     }
