@@ -7,6 +7,7 @@ const connectDB = require("./utils/db");
 const authRoutes = require("./routes/authRoutes");
 const campaignRoutes = require("./routes/campaignRoutes");
 const withdrawalRoutes = require("./routes/withdrawalRoutes");
+const paymentsRouter = require("./routes/payments");
 
 const app = express();
 
@@ -14,7 +15,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use(
     cors({
-        origin: process.env.CLIENT_URL,
+        origin: process.env.BETTER_AUTH_URL,
         credentials: true,
     })
 );
@@ -25,17 +26,42 @@ const startServer = async () => {
     try {
         const db = await connectDB();
 
-        const usersCollection = db.collection("users");
-        const campaignsCollection = db.collection("campaigns");
+        const usersCollection =
+            db.collection("users");
+
+        const campaignsCollection =
+            db.collection("campaigns");
+
         const withdrawalsCollection =
             db.collection("withdrawals");
 
-        app.use("/api/auth", authRoutes);
+        const contributionsCollection =
+            db.collection("contributions");
+
+        // -----------------------------
+        // Auth Routes
+        // -----------------------------
+
+        app.use(
+            "/api/auth",
+            authRoutes
+        );
+
+        // -----------------------------
+        // Campaign Routes
+        // -----------------------------
 
         app.use(
             "/api/campaigns",
-            campaignRoutes(campaignsCollection)
+            campaignRoutes(
+                campaignsCollection,
+                usersCollection
+            )
         );
+
+        // -----------------------------
+        // Withdrawal Routes
+        // -----------------------------
 
         app.use(
             "/api/withdrawals",
@@ -45,9 +71,31 @@ const startServer = async () => {
             )
         );
 
+        // -----------------------------
+        // Payment Routes
+        // -----------------------------
+
+        app.use(
+            "/api/payments",
+            paymentsRouter(
+                campaignsCollection,
+                contributionsCollection
+            )
+        );
+
+        // -----------------------------
+        // Root Route
+        // -----------------------------
+
         app.get("/", (req, res) => {
-            res.send("CrowdFunding server is running");
+            res.send(
+                "CrowdFunding server is running"
+            );
         });
+
+        // -----------------------------
+        // Start Server
+        // -----------------------------
 
         app.listen(PORT, () => {
             console.log(
