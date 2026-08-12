@@ -1,9 +1,12 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+
 const connectDB = require("./utils/db");
 
 const authRoutes = require("./routes/authRoutes");
+const campaignRoutes = require("./routes/campaignRoutes");
+const withdrawalRoutes = require("./routes/withdrawalRoutes");
 
 const app = express();
 
@@ -17,20 +20,46 @@ app.use(
 );
 
 app.use(express.json());
-app.use("/api/auth", authRoutes);
 
-app.get("/", (req, res) => {
-    res.send("CrowdFunding server is running");
-});
 const startServer = async () => {
     try {
-        await connectDB();
+        const db = await connectDB();
+
+        const usersCollection = db.collection("users");
+        const campaignsCollection = db.collection("campaigns");
+        const withdrawalsCollection =
+            db.collection("withdrawals");
+
+        app.use("/api/auth", authRoutes);
+
+        app.use(
+            "/api/campaigns",
+            campaignRoutes(campaignsCollection)
+        );
+
+        app.use(
+            "/api/withdrawals",
+            withdrawalRoutes(
+                withdrawalsCollection,
+                usersCollection
+            )
+        );
+
+        app.get("/", (req, res) => {
+            res.send("CrowdFunding server is running");
+        });
 
         app.listen(PORT, () => {
-            console.log(`CrowdFunding server running on port ${PORT}`);
+            console.log(
+                `CrowdFunding server running on port ${PORT}`
+            );
         });
     } catch (error) {
-        console.error("Failed to start server:", error);
+        console.error(
+            "Failed to start server:",
+            error
+        );
+
         process.exit(1);
     }
 };

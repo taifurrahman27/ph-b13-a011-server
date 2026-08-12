@@ -1,0 +1,297 @@
+const express = require("express");
+const { ObjectId } = require("mongodb");
+
+const router = express.Router();
+
+module.exports = (campaignsCollection, usersCollection) => {
+    router.post("/", async (req, res) => {
+        try {
+            const {
+                creatorId,
+                campaign_title,
+                campaign_story,
+                category,
+                funding_goal,
+                minimum_Contribution,
+                deadline,
+                reward_info,
+                campaign_image_url,
+            } = req.body;
+
+            if (!creatorId) {
+                return res.status(400).json({
+                    message: "Creator ID is required.",
+                });
+            }
+
+            if (!ObjectId.isValid(creatorId)) {
+                return res.status(400).json({
+                    message: "Invalid creator ID.",
+                });
+            }
+
+            if (
+                !campaign_title ||
+                !campaign_story ||
+                !category ||
+                funding_goal === undefined ||
+                funding_goal === null ||
+                minimum_Contribution === undefined ||
+                minimum_Contribution === null ||
+                !deadline ||
+                !reward_info ||
+                !campaign_image_url
+            ) {
+                return res.status(400).json({
+                    message: "All campaign fields are required.",
+                });
+            }
+
+            const creator = await usersCollection.findOne({
+                _id: new ObjectId(creatorId),
+            });
+
+            if (!creator) {
+                return res.status(404).json({
+                    message: "Creator not found.",
+                });
+            }
+
+            if (creator.role?.toLowerCase() !== "creator") {
+                return res.status(403).json({
+                    message: "Only creators can create campaigns.",
+                });
+            }
+
+            const cleanTitle = campaign_title.trim();
+            const cleanStory = campaign_story.trim();
+            const cleanCategory = category.trim();
+            const cleanRewardInfo = reward_info.trim();
+            const cleanImageUrl = campaign_image_url.trim();
+
+            if (
+                !cleanTitle ||
+                !cleanStory ||
+                !cleanCategory ||
+                !cleanRewardInfo ||
+                !cleanImageUrl
+            ) {
+                return res.status(400).json({
+                    message: "Campaign fields cannot be empty.",
+                });
+            }
+
+            const fundingGoal = Number(funding_goal);
+            const minimumContribution = Number(
+                minimum_Contribution
+            );
+
+            if (
+                !Number.isFinite(fundingGoal) ||
+                !Number.isFinite(minimumContribution)
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Funding goal and minimum contribution must be valid numbers.",
+                });
+            }
+
+            if (
+                fundingGoal <= 0 ||
+                minimumContribution <= 0
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Funding goal and minimum contribution must be greater than 0.",
+                });
+            }
+
+            if (minimumContribution > fundingGoal) {
+                return res.status(400).json({
+                    message:
+                        "Minimum contribution cannot be greater than the funding goal.",
+                });
+            }
+
+            const deadlineDate = new Date(deadline);
+
+            if (Number.isNaN(deadlineDate.getTime())) {
+                return res.status(400).json({
+                    message: "Invalid campaign deadline.",
+                });
+            }
+
+            const today = new Date();
+
+            today.setHours(0, 0, 0, 0);
+
+            if (deadlineDate < today) {
+                return res.status(400).json({
+                    message:
+                        "Campaign deadline cannot be in the past.",
+                });
+            }
+
+            try {
+                const imageUrl = new URL(cleanImageUrl);
+
+                if (
+                    imageUrl.protocol !== "http:" &&
+                    imageUrl.protocol !== "https:"
+                ) {
+                    return res.status(400).json({
+                        message:
+                            "Campaign image URL must use HTTP or HTTPS.",
+                    });
+                }
+            } catch {
+                return res.status(400).json({
+                    message: "Invalid campaign image URL.",
+                });
+            }
+
+            const now = new Date();
+
+            const campaign = {
+                creatorId: creatorId,
+                campaign_title: cleanTitle,
+                campaign_story: cleanStory,
+                category: cleanCategory,
+                funding_goal: fundingGoal,
+                minimum_Contribution: minimumContribution,
+                deadline,
+                reward_info: cleanRewardInfo,
+                campaign_image_url: cleanImageUrl,
+                status: "pending",
+                total_contributed: 0,
+                createdAt: now,
+                updatedAt: now,
+            };
+
+            const result = await campaignsCollection.insertOne(
+                campaign
+            );
+
+            return res.status(201).json({
+                success: true,
+                message:
+                    "Campaign created successfully.",
+                campaign: {
+                    _id: result.insertedId,
+                    ...campaign,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Create campaign error:",
+                error
+            );
+
+            return res.status(500).json({
+                message:
+                    "Failed to create campaign.",
+            });
+        }
+    });
+
+    router.get("/my-campaigns", async (req, res) => {
+        try {
+            const creatorId =
+                req.headers["x-user-id"];
+
+            if (!creatorId) {
+                return res.status(401).json({
+                    message: "Creator ID is required.",
+                });
+            }
+
+            if (!ObjectId.isValid(creatorId)) {
+                return res.status(400).json({
+                    message: "Invalid creator ID.",
+                });
+            }
+
+            const creator = await usersCollection.findOne({
+                _id: new ObjectId(creatorId),
+            });
+
+            if (!creator) {
+                return res.status(404).json({
+                    message: "Creator not found.",
+                });
+            }
+
+            if (creator.role?.toLowerCase() !== "creator") {
+                return res.status(403).json({
+                    message:
+                        "Only creators can access their campaigns.",
+                });
+            }
+
+            const campaigns =
+                await campaignsCollection
+                    .find({
+                        creatorId: creatorId,
+                    })
+                    .sort({
+                        createdAt: -1,
+                    })
+                    .toArray();
+
+            return res.status(200).json({
+                success: true,
+                campaigns,
+            });
+        } catch (error) {
+            console.error(
+                "Get my campaigns error:",
+                error
+            );
+
+            return res.status(500).json({
+                message:
+                    "Failed to fetch your campaigns.",
+            });
+        }
+    });
+
+    router.get("/:id", async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).json({
+                    message: "Invalid campaign ID.",
+                });
+            }
+
+            const campaign =
+                await campaignsCollection.findOne({
+                    _id: new ObjectId(id),
+                });
+
+            if (!campaign) {
+                return res.status(404).json({
+                    message: "Campaign not found.",
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                campaign,
+            });
+        } catch (error) {
+            console.error(
+                "Get campaign error:",
+                error
+            );
+
+            return res.status(500).json({
+                message:
+                    "Failed to fetch campaign.",
+            });
+        }
+    });
+
+    return router;
+};
