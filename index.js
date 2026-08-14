@@ -8,6 +8,8 @@ const authRoutes = require("./routes/authRoutes");
 const campaignRoutes = require("./routes/campaignRoutes");
 const withdrawalRoutes = require("./routes/withdrawalRoutes");
 const paymentsRouter = require("./routes/payments");
+const paymentRoutes = require("./routes/paymentRoutes");
+const stripeWebhookRoutes = require("./routes/stripeWebhookRoutes");
 
 const app = express();
 
@@ -20,6 +22,7 @@ app.use(
     })
 );
 
+app.use("/api/stripe", stripeWebhookRoutes);
 app.use(express.json());
 
 const startServer = async () => {
@@ -38,18 +41,13 @@ const startServer = async () => {
         const contributionsCollection =
             db.collection("contributions");
 
-        // -----------------------------
-        // Auth Routes
-        // -----------------------------
 
         app.use(
             "/api/auth",
             authRoutes
         );
 
-        // -----------------------------
-        // Campaign Routes
-        // -----------------------------
+
 
         app.use(
             "/api/campaigns",
@@ -59,9 +57,6 @@ const startServer = async () => {
             )
         );
 
-        // -----------------------------
-        // Withdrawal Routes
-        // -----------------------------
 
         app.use(
             "/api/withdrawals",
@@ -71,9 +66,7 @@ const startServer = async () => {
             )
         );
 
-        // -----------------------------
-        // Payment Routes
-        // -----------------------------
+
 
         app.use(
             "/api/payments",
@@ -83,9 +76,9 @@ const startServer = async () => {
             )
         );
 
-        // -----------------------------
-        // Root Route
-        // -----------------------------
+
+        app.use("/api/payments", paymentRoutes);
+
 
         app.get("/", (req, res) => {
             res.send(
@@ -93,9 +86,7 @@ const startServer = async () => {
             );
         });
 
-        // -----------------------------
-        // Start Server
-        // -----------------------------
+
 
         app.listen(PORT, () => {
             console.log(

@@ -4,8 +4,14 @@ const Stripe = require("stripe");
 
 const router = express.Router();
 
-module.exports = (campaignsCollection, contributionsCollection) => {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+module.exports = (
+    campaignsCollection,
+    contributionsCollection,
+    usersCollection
+) => {
+    const stripe = new Stripe(
+        process.env.STRIPE_SECRET_KEY
+    );
 
     const verifyToken = require("../middleware/verifyToken");
 
@@ -30,7 +36,6 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     });
                 }
 
-
                 if (!campaignId) {
                     return res.status(400).json({
                         message: "Campaign ID is required.",
@@ -43,14 +48,14 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     });
                 }
 
-
                 if (
                     amount === undefined ||
                     amount === null ||
                     amount === ""
                 ) {
                     return res.status(400).json({
-                        message: "Contribution amount is required.",
+                        message:
+                            "Contribution amount is required.",
                     });
                 }
 
@@ -66,10 +71,34 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     });
                 }
 
-
-                const campaign = await campaignsCollection.findOne({
-                    _id: new ObjectId(campaignId),
+                const user = await usersCollection.findOne({
+                    _id: new ObjectId(supporterId),
                 });
+
+                if (!user) {
+                    return res.status(404).json({
+                        message: "User not found.",
+                    });
+                }
+
+                if (user.role !== "supporter") {
+                    return res.status(403).json({
+                        message:
+                            "Only supporters can make contributions.",
+                    });
+                }
+
+                if (!user.email) {
+                    return res.status(400).json({
+                        message:
+                            "User email is required for payment.",
+                    });
+                }
+
+                const campaign =
+                    await campaignsCollection.findOne({
+                        _id: new ObjectId(campaignId),
+                    });
 
                 if (!campaign) {
                     return res.status(404).json({
@@ -89,7 +118,9 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                 );
 
                 if (
-                    !Number.isFinite(minimumContribution) ||
+                    !Number.isFinite(
+                        minimumContribution
+                    ) ||
                     minimumContribution <= 0
                 ) {
                     return res.status(400).json({
@@ -98,27 +129,39 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     });
                 }
 
-                if (contributionAmount < minimumContribution) {
+                if (
+                    contributionAmount <
+                    minimumContribution
+                ) {
                     return res.status(400).json({
                         message: `Minimum contribution is $${minimumContribution}.`,
                     });
                 }
 
-                const deadline = new Date(campaign.deadline);
+                const deadline = new Date(
+                    campaign.deadline
+                );
 
-                if (Number.isNaN(deadline.getTime())) {
+                if (
+                    Number.isNaN(deadline.getTime())
+                ) {
                     return res.status(400).json({
-                        message: "Campaign deadline is invalid.",
+                        message:
+                            "Campaign deadline is invalid.",
                     });
                 }
 
                 if (deadline < new Date()) {
                     return res.status(400).json({
-                        message: "This campaign has already ended.",
+                        message:
+                            "This campaign has already ended.",
                     });
                 }
 
-                const fundingGoal = Number(campaign.funding_goal);
+                const fundingGoal = Number(
+                    campaign.funding_goal
+                );
+
                 const totalContributed = Number(
                     campaign.total_contributed || 0
                 );
@@ -128,12 +171,14 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     fundingGoal <= 0
                 ) {
                     return res.status(400).json({
-                        message: "Campaign funding goal is invalid.",
+                        message:
+                            "Campaign funding goal is invalid.",
                     });
                 }
 
                 const remainingAmount =
-                    fundingGoal - totalContributed;
+                    fundingGoal -
+                    totalContributed;
 
                 if (remainingAmount <= 0) {
                     return res.status(400).json({
@@ -142,7 +187,10 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     });
                 }
 
-                if (contributionAmount > remainingAmount) {
+                if (
+                    contributionAmount >
+                    remainingAmount
+                ) {
                     return res.status(400).json({
                         message: `Maximum contribution allowed is $${remainingAmount}.`,
                     });
@@ -182,57 +230,74 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                     "http://localhost:3000";
 
                 const session =
-                    await stripe.checkout.sessions.create({
-                        mode: "payment",
+                    await stripe.checkout.sessions.create(
+                        {
+                            mode: "payment",
 
-                        payment_method_types: ["card"],
+                            payment_method_types: [
+                                "card",
+                            ],
 
-                        line_items: [
-                            {
-                                price_data: {
-                                    currency: "usd",
 
-                                    product_data: {
-                                        name:
-                                            campaign.campaign_title,
+                            customer_email:
+                                user.email,
 
-                                        description:
-                                            `Contribution to ${campaign.campaign_title}`,
+                            line_items: [
+                                {
+                                    price_data: {
+                                        currency:
+                                            "usd",
+
+                                        product_data: {
+                                            name:
+                                                campaign.campaign_title,
+
+                                            description:
+                                                `Contribution to ${campaign.campaign_title}`,
+                                        },
+
+                                        unit_amount:
+                                            amountInCents,
                                     },
 
-                                    unit_amount: amountInCents,
+                                    quantity: 1,
                                 },
+                            ],
 
-                                quantity: 1,
+                            metadata: {
+                                contributionId:
+                                    contributionResult.insertedId.toString(),
+
+                                campaignId,
+
+                                supporterId,
+
+                                supporterEmail:
+                                    user.email,
+
+                                creatorId:
+                                    campaign.creatorId,
                             },
-                        ],
 
-                        metadata: {
-                            contributionId:
-                                contributionResult.insertedId.toString(),
+                            success_url:
+                                `${frontendUrl}/dashboard/my-contributions?payment=success&session_id={CHECKOUT_SESSION_ID}`,
 
-                            campaignId,
-
-                            supporterId,
-
-                            creatorId: campaign.creatorId,
-                        },
-
-                        success_url:
-                            `${frontendUrl}/dashboard/my-contributions?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-
-                        cancel_url:
-                            `${frontendUrl}/dashboard/explore-campaigns?payment=cancelled`,
-                    });
+                            cancel_url:
+                                `${frontendUrl}/dashboard/explore-campaigns?payment=cancelled`,
+                        }
+                    );
 
                 await contributionsCollection.updateOne(
                     {
-                        _id: contributionResult.insertedId,
+                        _id:
+                            contributionResult.insertedId,
                     },
                     {
                         $set: {
-                            stripeSessionId: session.id,
-                            updatedAt: new Date(),
+                            stripeSessionId:
+                                session.id,
+                            updatedAt:
+                                new Date(),
                         },
                     }
                 );
@@ -255,7 +320,8 @@ module.exports = (campaignsCollection, contributionsCollection) => {
                         "Failed to create checkout session.",
                 });
             }
-        });
+        }
+    );
 
     return router;
 };

@@ -2,6 +2,8 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const connectDB = require("../utils/db");
+const verifyToken = require("../middleware/verifyToken");
+const { ObjectId } = require("mongodb");
 
 const router = express.Router();
 
@@ -75,7 +77,9 @@ router.post("/register", async (req, res) => {
         }
 
         if (!process.env.JWT_SECRET) {
-            console.error("JWT_SECRET is missing from environment variables.");
+            console.error(
+                "JWT_SECRET is missing from environment variables."
+            );
 
             return res.status(500).json({
                 message: "Server authentication configuration is missing.",
@@ -143,7 +147,9 @@ router.post("/login", async (req, res) => {
         }
 
         if (!process.env.JWT_SECRET) {
-            console.error("JWT_SECRET is missing from environment variables.");
+            console.error(
+                "JWT_SECRET is missing from environment variables."
+            );
 
             return res.status(500).json({
                 message: "Server authentication configuration is missing.",
@@ -188,6 +194,39 @@ router.post("/login", async (req, res) => {
 
         return res.status(500).json({
             message: "Something went wrong during login.",
+        });
+    }
+});
+
+router.get("/me", verifyToken, async (req, res) => {
+    try {
+        if (!req.user?.id || !ObjectId.isValid(req.user.id)) {
+            return res.status(401).json({
+                message: "Invalid user token.",
+            });
+        }
+
+        const db = await connectDB();
+        const usersCollection = db.collection("users");
+
+        const user = await usersCollection.findOne({
+            _id: new ObjectId(req.user.id),
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found.",
+            });
+        }
+
+        return res.status(200).json({
+            user: formatUser(user),
+        });
+    } catch (error) {
+        console.error("Get current user error:", error);
+
+        return res.status(500).json({
+            message: "Failed to get current user.",
         });
     }
 });
