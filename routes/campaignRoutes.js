@@ -4,10 +4,7 @@ const { ObjectId } = require("mongodb");
 const router = express.Router();
 
 module.exports = (campaignsCollection, usersCollection) => {
-    // ==========================================
-    // CREATE CAMPAIGN
-    // POST /api/campaigns
-    // ==========================================
+
     router.post("/", async (req, res) => {
         try {
             const {
@@ -22,9 +19,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 campaign_image_url,
             } = req.body;
 
-            // ------------------------------------------
-            // Validate creator ID
-            // ------------------------------------------
+
             if (!creatorId) {
                 return res.status(400).json({
                     success: false,
@@ -39,9 +34,6 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Validate required fields
-            // ------------------------------------------
             if (
                 !campaign_title ||
                 !campaign_story ||
@@ -60,9 +52,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Verify creator exists
-            // ------------------------------------------
+
             const creator = await usersCollection.findOne({
                 _id: new ObjectId(creatorId),
             });
@@ -74,9 +64,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Verify creator role
-            // ------------------------------------------
+
             if (
                 creator.role?.toLowerCase() !== "creator"
             ) {
@@ -87,9 +75,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Clean string values
-            // ------------------------------------------
+
             const cleanTitle = String(
                 campaign_title
             ).trim();
@@ -110,9 +96,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 campaign_image_url
             ).trim();
 
-            // ------------------------------------------
-            // Check empty strings
-            // ------------------------------------------
+
             if (
                 !cleanTitle ||
                 !cleanStory ||
@@ -127,9 +111,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Validate funding values
-            // ------------------------------------------
+
             const fundingGoal = Number(
                 funding_goal
             );
@@ -170,9 +152,6 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Validate deadline
-            // ------------------------------------------
             const deadlineDate = new Date(
                 `${deadline}T23:59:59`
             );
@@ -201,9 +180,7 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Validate image URL
-            // ------------------------------------------
+
             try {
                 const imageUrl = new URL(
                     cleanImageUrl
@@ -227,9 +204,6 @@ module.exports = (campaignsCollection, usersCollection) => {
                 });
             }
 
-            // ------------------------------------------
-            // Create campaign
-            // ------------------------------------------
             const now = new Date();
 
             const campaign = {
@@ -285,10 +259,7 @@ module.exports = (campaignsCollection, usersCollection) => {
         }
     });
 
-    // ==========================================
-    // GET MY CAMPAIGNS
-    // GET /api/campaigns/my-campaigns
-    // ==========================================
+
     router.get(
         "/my-campaigns",
         async (req, res) => {
@@ -367,10 +338,7 @@ module.exports = (campaignsCollection, usersCollection) => {
         }
     );
 
-    // ==========================================
-    // GET APPROVED CAMPAIGNS
-    // GET /api/campaigns
-    // ==========================================
+
     router.get("/", async (req, res) => {
         try {
             const campaigns =
@@ -401,10 +369,7 @@ module.exports = (campaignsCollection, usersCollection) => {
         }
     });
 
-    // ==========================================
-    // GET SINGLE CAMPAIGN
-    // GET /api/campaigns/:id
-    // ==========================================
+
     router.get("/:id", async (req, res) => {
         try {
             const { id } = req.params;
@@ -412,21 +377,19 @@ module.exports = (campaignsCollection, usersCollection) => {
             if (!ObjectId.isValid(id)) {
                 return res.status(400).json({
                     success: false,
-                    message:
-                        "Invalid campaign ID.",
+                    message: "Invalid campaign ID.",
                 });
             }
 
-            const campaign =
-                await campaignsCollection.findOne({
-                    _id: new ObjectId(id),
-                });
+            const campaign = await campaignsCollection.findOne({
+                _id: new ObjectId(id),
+                status: "approved",
+            });
 
             if (!campaign) {
                 return res.status(404).json({
                     success: false,
-                    message:
-                        "Campaign not found.",
+                    message: "Campaign not found.",
                 });
             }
 
@@ -435,18 +398,16 @@ module.exports = (campaignsCollection, usersCollection) => {
                 campaign,
             });
         } catch (error) {
-            console.error(
-                "Get campaign error:",
-                error
-            );
+            console.error("Get campaign error:", error);
 
             return res.status(500).json({
                 success: false,
-                message:
-                    "Failed to fetch campaign.",
+                message: "Failed to fetch campaign.",
             });
         }
     });
+
+
 
     return router;
 };

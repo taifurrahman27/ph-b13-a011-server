@@ -2,6 +2,7 @@ const express = require("express");
 const Stripe = require("stripe");
 const connectDB = require("../utils/db");
 const verifyToken = require("../middleware/verifyToken");
+const { ObjectId } = require("mongodb");
 
 const router = express.Router();
 
@@ -144,5 +145,49 @@ router.post(
         }
     }
 );
+
+
+router.get("/payment-history", verifyToken, async (req, res) => {
+    try {
+        const supporterId = req.user.id;
+
+        if (!supporterId || !ObjectId.isValid(supporterId)) {
+            return res.status(401).json({
+                message: "Invalid user token.",
+            });
+        }
+
+        const db = await connectDB();
+
+        const contributionsCollection =
+            db.collection("contributions");
+
+        const payments =
+            await contributionsCollection
+                .find({
+                    supporterId: supporterId,
+                })
+                .sort({
+                    createdAt: -1,
+                })
+                .toArray();
+
+        return res.status(200).json({
+            success: true,
+            payments,
+        });
+    } catch (error) {
+        console.error(
+            "Get payment history error:",
+            error
+        );
+
+        return res.status(500).json({
+            message: "Failed to get payment history.",
+        });
+    }
+});
+
+
 
 module.exports = router;
