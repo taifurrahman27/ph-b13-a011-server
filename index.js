@@ -34,6 +34,7 @@ const startServer = async () => {
         const campaignsCollection = db.collection("campaigns");
         const withdrawalsCollection = db.collection("withdrawals");
         const contributionsCollection = db.collection("contributions");
+        const contributionRoutes = require("./routes/contributionRoutes");
 
         app.use("/api/auth", authRoutes);
 
@@ -62,6 +63,7 @@ const startServer = async () => {
         );
 
         app.use("/api/payments", paymentRoutes);
+        app.use("/api/contributions", contributionRoutes);
 
         app.use("/api/admin", adminRoutes);
 
