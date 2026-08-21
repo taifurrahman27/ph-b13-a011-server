@@ -1,8 +1,10 @@
 const express = require("express");
 const { ObjectId } = require("mongodb");
+const connectDB = require("../utils/db");
 
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
+const verifyAdmin = require("../middleware/verifyAdmin");
 
 module.exports = (campaignsCollection, usersCollection) => {
 
@@ -409,6 +411,182 @@ module.exports = (campaignsCollection, usersCollection) => {
         }
     });
 
+
+
+    router.get("/admin/all", verifyToken, async (req, res) => {
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({
+                    message: "Admin access required.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const campaigns = await db
+                .collection("campaigns")
+                .aggregate([
+                    {
+                        $lookup: {
+                            from: "users",
+                            let: {
+                                creatorId: "$creatorId",
+                            },
+                            pipeline: [
+                                {
+                                    $match: {
+                                        $expr: {
+                                            $eq: [
+                                                "$_id",
+                                                {
+                                                    $convert: {
+                                                        input: "$$creatorId",
+                                                        to: "objectId",
+                                                        onError: null,
+                                                        onNull: null,
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    },
+                                },
+                                {
+                                    $project: {
+                                        _id: 1,
+                                        name: 1,
+                                        email: 1,
+                                        profileImage: 1,
+                                    },
+                                },
+                            ],
+                            as: "creator",
+                        },
+                    },
+                    {
+                        $unwind: {
+                            path: "$creator",
+                            preserveNullAndEmptyArrays: true,
+                        },
+                    },
+                    {
+                        $sort: {
+                            createdAt: -1,
+                        },
+                    },
+                ])
+                .toArray();
+
+            return res.status(200).json({
+                success: true,
+                campaigns,
+            });
+        } catch (error) {
+            console.error("Admin campaign fetch error:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: "Failed to fetch campaigns.",
+            });
+        }
+    });
+
+    router.patch("/admin/:campaignId/approve", verifyToken, verifyAdmin, async (req, res) => {
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({
+                    success: false,
+                    message: "Admin access required.",
+                });
+            }
+
+            const { campaignId } = req.params;
+
+            if (!ObjectId.isValid(campaignId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid campaign ID.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const result = await db.collection("campaigns").updateOne(
+                {
+                    _id: new ObjectId(campaignId),
+                    status: "pending",
+                },
+                {
+                    $set: {
+                        status: "approved",
+                        updatedAt: new Date(),
+                    },
+                }
+            );
+
+            if (result.matchedCount === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Pending campaign not found.",
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Campaign approved successfully.",
+            });
+        } catch (error) {
+            console.error("Campaign approval error:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: "Failed to approve campaign.",
+            });
+        }
+    });
+
+
+    router.delete("/:campaignId", verifyToken, async (req, res) => {
+        try {
+            const { campaignId } = req.params;
+
+            if (!ObjectId.isValid(campaignId)) {
+                return res.status(400).json({
+                    message: "Invalid campaign ID.",
+                });
+            }
+
+            if (req.user.role !== "admin") {
+                return res.status(403).json({
+                    message: "Admin access required.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const campaignsCollection = db.collection("campaigns");
+
+            const result = await campaignsCollection.deleteOne({
+                _id: new ObjectId(campaignId),
+            });
+
+            if (result.deletedCount === 0) {
+                return res.status(404).json({
+                    message: "Campaign not found.",
+                });
+            }
+
+            res.status(200).json({
+                success: true,
+                message: "Campaign deleted successfully.",
+            });
+        } catch (error) {
+            console.error("Admin campaign delete error:", error);
+
+            res.status(500).json({
+                message: "Failed to delete campaign.",
+            });
+        }
+    });
 
 
     return router;
