@@ -4,8 +4,13 @@ const jwt = require("jsonwebtoken");
 const connectDB = require("../utils/db");
 const verifyToken = require("../middleware/verifyToken");
 const { ObjectId } = require("mongodb");
+const { OAuth2Client } = require("google-auth-library");
 
 const router = express.Router();
+
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID
+);
 
 const createToken = (user) => {
     return jwt.sign(
@@ -197,6 +202,137 @@ router.post("/login", async (req, res) => {
         });
     }
 });
+
+
+router.post("/google", async (req, res) => {
+    try {
+        const { credential, role } = req.body;
+
+        if (!credential) {
+            return res.status(400).json({
+                message: "Google credential is required.",
+            });
+        }
+
+        if (!process.env.GOOGLE_CLIENT_ID) {
+            console.error(
+                "GOOGLE_CLIENT_ID is missing from environment variables."
+            );
+
+            return res.status(500).json({
+                message: "Google authentication is not configured.",
+            });
+        }
+
+        const ticket = await googleClient.verifyIdToken({
+            idToken: credential,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+
+        const payload = ticket.getPayload();
+
+        if (!payload) {
+            return res.status(401).json({
+                message: "Invalid Google account.",
+            });
+        }
+
+        const {
+            sub: googleId,
+            email,
+            name,
+            picture,
+            email_verified,
+        } = payload;
+
+        if (!email || !email_verified) {
+            return res.status(401).json({
+                message: "Google email could not be verified.",
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const db = await connectDB();
+        const usersCollection = db.collection("users");
+
+        let user = await usersCollection.findOne({
+            email: normalizedEmail,
+        });
+
+        /*
+         * Existing CrowdFunding user
+         */
+        if (user) {
+            const token = createToken(user);
+
+            return res.status(200).json({
+                message: "Google login successful.",
+                token,
+                user: formatUser(user),
+            });
+        }
+
+        /*
+         * New Google user
+         *
+         * A role is required because Google does not provide
+         * a CrowdFunding role.
+         */
+        if (!role) {
+            return res.status(200).json({
+                requiresRole: true,
+                googleUser: {
+                    googleId,
+                    name: name || "Google User",
+                    email: normalizedEmail,
+                    profileImage: picture || "",
+                },
+            });
+        }
+
+        if (!["supporter", "creator"].includes(role)) {
+            return res.status(400).json({
+                message: "Invalid role.",
+            });
+        }
+
+        const credits = role === "supporter" ? 50 : 20;
+
+        const newUser = {
+            name: (name || "Google User").trim(),
+            email: normalizedEmail,
+            profileImage: picture || "",
+            password: null,
+            googleId,
+            role,
+            credits,
+            createdAt: new Date(),
+        };
+
+        const result = await usersCollection.insertOne(newUser);
+
+        user = {
+            ...newUser,
+            _id: result.insertedId,
+        };
+
+        const token = createToken(user);
+
+        return res.status(201).json({
+            message: "Google account created successfully.",
+            token,
+            user: formatUser(user),
+        });
+    } catch (error) {
+        console.error("Google login error:", error);
+
+        return res.status(401).json({
+            message: "Google authentication failed.",
+        });
+    }
+});
+
 
 router.get("/me", verifyToken, async (req, res) => {
     try {

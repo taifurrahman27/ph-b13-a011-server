@@ -2,10 +2,11 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 
 const router = express.Router();
+const verifyToken = require("../middleware/authMiddleware");
 
 module.exports = (campaignsCollection, usersCollection) => {
 
-    router.post("/", async (req, res) => {
+    router.post("/", verifyToken, async (req, res) => {
         try {
             const {
                 creatorId,
@@ -262,6 +263,7 @@ module.exports = (campaignsCollection, usersCollection) => {
 
     router.get(
         "/my-campaigns",
+        verifyToken,
         async (req, res) => {
             try {
                 const creatorId =
@@ -370,7 +372,7 @@ module.exports = (campaignsCollection, usersCollection) => {
     });
 
 
-    router.get("/:id", async (req, res) => {
+    router.get("/:id", verifyToken, async (req, res) => {
         try {
             const { id } = req.params;
 
