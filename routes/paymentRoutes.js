@@ -438,4 +438,77 @@ router.post(
 );
 
 
+router.get(
+    "/payment-history",
+    verifyToken,
+    async (req, res) => {
+        try {
+            if (!req.user?.id) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Unauthorized.",
+                });
+            }
+
+            if (!ObjectId.isValid(req.user.id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid user ID.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const usersCollection = db.collection("users");
+            const paymentsCollection = db.collection("payments");
+
+            const user = await usersCollection.findOne({
+                _id: new ObjectId(req.user.id),
+            });
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found.",
+                });
+            }
+
+            if (user.role !== "supporter") {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only supporters can view payment history.",
+                });
+            }
+
+            const payments = await paymentsCollection
+                .find({
+                    user_id: user._id,
+                })
+                .sort({
+                    purchase_date: -1,
+                    createdAt: -1,
+                })
+                .toArray();
+
+            return res.status(200).json({
+                success: true,
+                payments,
+            });
+        } catch (error) {
+            console.error(
+                "Payment history error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load payment history.",
+            });
+        }
+    }
+);
+
+
 module.exports = router;
