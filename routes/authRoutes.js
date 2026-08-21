@@ -260,9 +260,7 @@ router.post("/google", async (req, res) => {
             email: normalizedEmail,
         });
 
-        /*
-         * Existing CrowdFunding user
-         */
+    
         if (user) {
             const token = createToken(user);
 
@@ -273,12 +271,6 @@ router.post("/google", async (req, res) => {
             });
         }
 
-        /*
-         * New Google user
-         *
-         * A role is required because Google does not provide
-         * a CrowdFunding role.
-         */
         if (!role) {
             return res.status(200).json({
                 requiresRole: true,

@@ -10,9 +10,9 @@ const withdrawalRoutes = require("./routes/withdrawalRoutes");
 const paymentsRouter = require("./routes/payments");
 const paymentRoutes = require("./routes/paymentRoutes");
 const stripeWebhookRoutes = require("./routes/stripeWebhookRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
-
 const PORT = process.env.PORT || 5000;
 
 app.use(
@@ -23,31 +23,19 @@ app.use(
 );
 
 app.use("/api/stripe", stripeWebhookRoutes);
+
 app.use(express.json());
 
 const startServer = async () => {
     try {
         const db = await connectDB();
 
-        const usersCollection =
-            db.collection("users");
+        const usersCollection = db.collection("users");
+        const campaignsCollection = db.collection("campaigns");
+        const withdrawalsCollection = db.collection("withdrawals");
+        const contributionsCollection = db.collection("contributions");
 
-        const campaignsCollection =
-            db.collection("campaigns");
-
-        const withdrawalsCollection =
-            db.collection("withdrawals");
-
-        const contributionsCollection =
-            db.collection("contributions");
-
-
-        app.use(
-            "/api/auth",
-            authRoutes
-        );
-
-
+        app.use("/api/auth", authRoutes);
 
         app.use(
             "/api/campaigns",
@@ -57,7 +45,6 @@ const startServer = async () => {
             )
         );
 
-
         app.use(
             "/api/withdrawals",
             withdrawalRoutes(
@@ -65,8 +52,6 @@ const startServer = async () => {
                 usersCollection
             )
         );
-
-
 
         app.use(
             "/api/payments",
@@ -76,17 +61,13 @@ const startServer = async () => {
             )
         );
 
-
         app.use("/api/payments", paymentRoutes);
 
+        app.use("/api/admin", adminRoutes);
 
         app.get("/", (req, res) => {
-            res.send(
-                "CrowdFunding server is running"
-            );
+            res.send("CrowdFunding server is running");
         });
-
-
 
         app.listen(PORT, () => {
             console.log(
@@ -94,11 +75,7 @@ const startServer = async () => {
             );
         });
     } catch (error) {
-        console.error(
-            "Failed to start server:",
-            error
-        );
-
+        console.error("Failed to start server:", error);
         process.exit(1);
     }
 };
