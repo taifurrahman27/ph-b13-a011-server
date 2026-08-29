@@ -11,6 +11,8 @@ const paymentsRouter = require("./routes/payments");
 const paymentRoutes = require("./routes/paymentRoutes");
 const stripeWebhookRoutes = require("./routes/stripeWebhookRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const contributionRoutes = require("./routes/contributionRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -33,8 +35,9 @@ const startServer = async () => {
         const usersCollection = db.collection("users");
         const campaignsCollection = db.collection("campaigns");
         const withdrawalsCollection = db.collection("withdrawals");
-        const contributionsCollection = db.collection("contributions");
-        const contributionRoutes = require("./routes/contributionRoutes");
+        const contributionsCollection =
+            db.collection("contributions");
+        const paymentsCollection = db.collection("payments");
 
         app.use("/api/auth", authRoutes);
 
@@ -63,7 +66,21 @@ const startServer = async () => {
         );
 
         app.use("/api/payments", paymentRoutes);
-        app.use("/api/contributions", contributionRoutes);
+
+        app.use(
+            "/api/contributions",
+            contributionRoutes
+        );
+
+        app.use(
+            "/api/dashboard",
+            dashboardRoutes(
+                usersCollection,
+                campaignsCollection,
+                contributionsCollection,
+                paymentsCollection
+            )
+        );
 
         app.use("/api/admin", adminRoutes);
 
