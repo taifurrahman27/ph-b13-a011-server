@@ -53,7 +53,9 @@ const startServer = async () => {
             "/api/withdrawals",
             withdrawalRoutes(
                 withdrawalsCollection,
-                usersCollection
+                usersCollection,
+                contributionsCollection,
+                campaignsCollection
             )
         );
 

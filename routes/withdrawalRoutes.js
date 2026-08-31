@@ -1,146 +1,204 @@
 const express = require("express");
 const { ObjectId } = require("mongodb");
+const verifyToken = require("../middleware/verifyToken");
 
 const router = express.Router();
 
-module.exports = (withdrawalsCollection, usersCollection) => {
-    /*
-    ==========================================
-    CREATE WITHDRAWAL REQUEST
-    POST /api/withdrawals
-    ==========================================
-    */
+const CREATOR_CREDITS_PER_DOLLAR = 20;
+const MINIMUM_WITHDRAWAL_CREDITS = 200;
 
-    router.post("/", async (req, res) => {
+module.exports = (
+    withdrawalsCollection,
+    usersCollection,
+    contributionsCollection,
+    campaignsCollection
+) => {
+
+
+    router.post("/", verifyToken, async (req, res) => {
         try {
-            const {
-                creatorId,
-                amount,
-            } = req.body;
+            const creatorId = req.user?.id;
+            const { amount } = req.body;
 
-            if (!creatorId) {
-                return res.status(400).json({
-                    message: "Creator ID is required.",
+            if (!creatorId || !ObjectId.isValid(creatorId)) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid creator authentication.",
                 });
             }
 
-            if (!ObjectId.isValid(creatorId)) {
-                return res.status(400).json({
-                    message: "Invalid creator ID.",
-                });
-            }
+            const withdrawalCredits = Number(amount);
 
             if (
                 amount === undefined ||
                 amount === null ||
-                amount === ""
+                amount === "" ||
+                !Number.isFinite(withdrawalCredits)
             ) {
                 return res.status(400).json({
-                    message: "Withdrawal amount is required.",
-                });
-            }
-
-            const withdrawalAmount = Number(amount);
-
-            if (!Number.isFinite(withdrawalAmount)) {
-                return res.status(400).json({
+                    success: false,
                     message: "Withdrawal amount must be a valid number.",
                 });
             }
 
-            if (withdrawalAmount <= 0) {
+            if (!Number.isInteger(withdrawalCredits)) {
                 return res.status(400).json({
-                    message:
-                        "Withdrawal amount must be greater than 0.",
+                    success: false,
+                    message: "Withdrawal credits must be a whole number.",
                 });
             }
 
-            /*
-            ==========================================
-            CHECK CREATOR
-            ==========================================
-            */
+            if (withdrawalCredits < MINIMUM_WITHDRAWAL_CREDITS) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Minimum withdrawal is 200 credits ($10).",
+                });
+            }
+
+            const creatorObjectId = new ObjectId(creatorId);
 
             const creator = await usersCollection.findOne({
-                _id: new ObjectId(creatorId),
+                _id: creatorObjectId,
             });
 
             if (!creator) {
                 return res.status(404).json({
+                    success: false,
                     message: "Creator not found.",
                 });
             }
 
             if (
                 !creator.role ||
-                creator.role.toLowerCase() !== "creator"
+                String(creator.role).toLowerCase() !== "creator"
             ) {
                 return res.status(403).json({
-                    message:
-                        "Only creators can request withdrawals.",
+                    success: false,
+                    message: "Only creators can request withdrawals.",
                 });
             }
 
-            /*
-            ==========================================
-            CHECK AVAILABLE CREDITS
-            ==========================================
-            */
+            const creatorCampaigns = await campaignsCollection
+                .find({
+                    creatorId: creatorId,
+                })
+                .project({
+                    _id: 1,
+                })
+                .toArray();
 
-            const availableCredits = Number(
-                creator.credits || 0
+            const campaignIds = creatorCampaigns.map(
+                (campaign) => campaign._id
             );
 
-            if (withdrawalAmount > availableCredits) {
+            const approvedContributionResult =
+                campaignIds.length > 0
+                    ? await contributionsCollection
+                        .aggregate([
+                            {
+                                $match: {
+                                    campaign_id: {
+                                        $in: campaignIds,
+                                    },
+                                    status: "approved",
+                                },
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    totalCredits: {
+                                        $sum: {
+                                            $convert: {
+                                                input: "$contribution_credit",
+                                                to: "double",
+                                                onError: 0,
+                                                onNull: 0,
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        ])
+                        .toArray()
+                    : [];
+
+            const totalRaisedCredits = Number(
+                approvedContributionResult[0]?.totalCredits || 0
+            );
+
+            const previousWithdrawals =
+                await withdrawalsCollection
+                    .find({
+                        creatorId: creatorId,
+                        status: {
+                            $in: ["pending", "approved"],
+                        },
+                    })
+                    .toArray();
+
+            const alreadyWithdrawnCredits =
+                previousWithdrawals.reduce((total, withdrawal) => {
+                    const credits = Number(withdrawal.amount || 0);
+
+                    return (
+                        total +
+                        (Number.isFinite(credits) ? credits : 0)
+                    );
+                }, 0);
+
+            const availableWithdrawalCredits =
+                totalRaisedCredits - alreadyWithdrawnCredits;
+
+            if (availableWithdrawalCredits < MINIMUM_WITHDRAWAL_CREDITS) {
                 return res.status(400).json({
+                    success: false,
                     message:
-                        "Withdrawal amount cannot be greater than your available credits.",
-                    availableCredits,
+                        "You do not have enough available raised credits to request a withdrawal.",
+                    totalRaisedCredits,
+                    alreadyWithdrawnCredits,
+                    availableWithdrawalCredits,
                 });
             }
 
-            /*
-            ==========================================
-            PREVENT MULTIPLE PENDING REQUESTS
-            ==========================================
-            */
+            if (withdrawalCredits > availableWithdrawalCredits) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Withdrawal credits cannot be greater than your available raised credits.",
+                    totalRaisedCredits,
+                    alreadyWithdrawnCredits,
+                    availableWithdrawalCredits,
+                });
+            }
 
             const existingPending =
                 await withdrawalsCollection.findOne({
-                    creatorId,
+                    creatorId: creatorId,
                     status: "pending",
                 });
 
             if (existingPending) {
                 return res.status(409).json({
+                    success: false,
                     message:
                         "You already have a pending withdrawal request.",
                 });
             }
 
-            /*
-            ==========================================
-            CREATE WITHDRAWAL
-            ==========================================
-            */
-
             const now = new Date();
 
             const withdrawal = {
-                creatorId,
-
-                amount: withdrawalAmount,
-
+                creatorId: creatorId,
+                amount: withdrawalCredits,
+                withdrawalAmount:
+                    withdrawalCredits / CREATOR_CREDITS_PER_DOLLAR,
                 status: "pending",
-
                 createdAt: now,
                 updatedAt: now,
             };
 
             const result =
-                await withdrawalsCollection.insertOne(
-                    withdrawal
-                );
+                await withdrawalsCollection.insertOne(withdrawal);
 
             return res.status(201).json({
                 success: true,
@@ -152,72 +210,54 @@ module.exports = (withdrawalsCollection, usersCollection) => {
                 },
             });
         } catch (error) {
-            console.error(
-                "Create withdrawal error:",
-                error
-            );
+            console.error("Create withdrawal error:", error);
 
             return res.status(500).json({
+                success: false,
                 message:
+                    error.message ||
                     "Failed to create withdrawal request.",
             });
         }
     });
 
-    /*
-    ==========================================
-    GET CREATOR WITHDRAWALS
-    GET /api/withdrawals/creator/:creatorId
-    ==========================================
-    */
+    router.get("/creator/:creatorId", async (req, res) => {
+        try {
+            const { creatorId } = req.params;
 
-    router.get(
-        "/creator/:creatorId",
-        async (req, res) => {
-            try {
-                const { creatorId } = req.params;
-
-                if (!ObjectId.isValid(creatorId)) {
-                    return res.status(400).json({
-                        message: "Invalid creator ID.",
-                    });
-                }
-
-                const withdrawals =
-                    await withdrawalsCollection
-                        .find({
-                            creatorId,
-                        })
-                        .sort({
-                            createdAt: -1,
-                        })
-                        .toArray();
-
-                return res.status(200).json({
-                    success: true,
-                    withdrawals,
-                });
-            } catch (error) {
-                console.error(
-                    "Get creator withdrawals error:",
-                    error
-                );
-
-                return res.status(500).json({
-                    message:
-                        "Failed to fetch withdrawals.",
+            if (!ObjectId.isValid(creatorId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid creator ID.",
                 });
             }
-        }
-    );
 
-    /*
-    ==========================================
-    GET ALL WITHDRAWALS
-    GET /api/withdrawals
-    ADMIN
-    ==========================================
-    */
+            const withdrawals =
+                await withdrawalsCollection
+                    .find({
+                        creatorId: creatorId,
+                    })
+                    .sort({
+                        createdAt: -1,
+                    })
+                    .toArray();
+
+            return res.status(200).json({
+                success: true,
+                withdrawals,
+            });
+        } catch (error) {
+            console.error(
+                "Get creator withdrawals error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: "Failed to fetch withdrawals.",
+            });
+        }
+    });
 
     router.get("/", async (req, res) => {
         try {
@@ -239,8 +279,7 @@ module.exports = (withdrawalsCollection, usersCollection) => {
                         {
                             $lookup: {
                                 from: "users",
-                                localField:
-                                    "creatorObjectId",
+                                localField: "creatorObjectId",
                                 foreignField: "_id",
                                 as: "creator",
                             },
@@ -257,10 +296,12 @@ module.exports = (withdrawalsCollection, usersCollection) => {
                                 "creator.password": 0,
                             },
                         },
+                        {
+                            $sort: {
+                                createdAt: -1,
+                            },
+                        },
                     ])
-                    .sort({
-                        createdAt: -1,
-                    })
                     .toArray();
 
             return res.status(200).json({
@@ -274,18 +315,12 @@ module.exports = (withdrawalsCollection, usersCollection) => {
             );
 
             return res.status(500).json({
+                success: false,
                 message:
                     "Failed to fetch withdrawal requests.",
             });
         }
     });
-
-    /*
-    ==========================================
-    GET SINGLE WITHDRAWAL
-    GET /api/withdrawals/:id
-    ==========================================
-    */
 
     router.get("/:id", async (req, res) => {
         try {
@@ -293,6 +328,7 @@ module.exports = (withdrawalsCollection, usersCollection) => {
 
             if (!ObjectId.isValid(id)) {
                 return res.status(400).json({
+                    success: false,
                     message: "Invalid withdrawal ID.",
                 });
             }
@@ -304,6 +340,7 @@ module.exports = (withdrawalsCollection, usersCollection) => {
 
             if (!withdrawal) {
                 return res.status(404).json({
+                    success: false,
                     message: "Withdrawal not found.",
                 });
             }
@@ -319,232 +356,122 @@ module.exports = (withdrawalsCollection, usersCollection) => {
             );
 
             return res.status(500).json({
-                message:
-                    "Failed to fetch withdrawal.",
+                success: false,
+                message: "Failed to fetch withdrawal.",
             });
         }
     });
 
-    /*
-    ==========================================
-    APPROVE WITHDRAWAL
-    PATCH /api/withdrawals/:id/approve
-    ADMIN
-    ==========================================
-    */
 
-    router.patch(
-        "/:id/approve",
-        async (req, res) => {
-            try {
-                const { id } = req.params;
+    router.patch("/:id/approve", async (req, res) => {
+        try {
+            const { id } = req.params;
 
-                if (!ObjectId.isValid(id)) {
-                    return res.status(400).json({
-                        message:
-                            "Invalid withdrawal ID.",
-                    });
-                }
-
-                const withdrawal =
-                    await withdrawalsCollection.findOne({
-                        _id: new ObjectId(id),
-                    });
-
-                if (!withdrawal) {
-                    return res.status(404).json({
-                        message:
-                            "Withdrawal not found.",
-                    });
-                }
-
-                if (
-                    withdrawal.status !==
-                    "pending"
-                ) {
-                    return res.status(400).json({
-                        message:
-                            "Only pending withdrawals can be approved.",
-                    });
-                }
-
-                const creator =
-                    await usersCollection.findOne({
-                        _id: new ObjectId(
-                            withdrawal.creatorId
-                        ),
-                    });
-
-                if (!creator) {
-                    return res.status(404).json({
-                        message:
-                            "Creator not found.",
-                    });
-                }
-
-                const availableCredits =
-                    Number(creator.credits || 0);
-
-                if (
-                    Number(withdrawal.amount) >
-                    availableCredits
-                ) {
-                    return res.status(400).json({
-                        message:
-                            "Creator does not have enough credits to complete this withdrawal.",
-                        availableCredits,
-                    });
-                }
-
-                const now = new Date();
-
-                /*
-                Deduct credits only when Admin approves.
-                */
-
-                const userUpdate =
-                    await usersCollection.updateOne(
-                        {
-                            _id: new ObjectId(
-                                withdrawal.creatorId
-                            ),
-                            credits: {
-                                $gte: Number(
-                                    withdrawal.amount
-                                ),
-                            },
-                        },
-                        {
-                            $inc: {
-                                credits:
-                                    -Number(
-                                        withdrawal.amount
-                                    ),
-                            },
-                            $set: {
-                                updatedAt: now,
-                            },
-                        }
-                    );
-
-                if (
-                    userUpdate.modifiedCount !== 1
-                ) {
-                    return res.status(400).json({
-                        message:
-                            "Failed to deduct creator credits.",
-                    });
-                }
-
-                const withdrawalUpdate =
-                    await withdrawalsCollection.updateOne(
-                        {
-                            _id: new ObjectId(id),
-                            status: "pending",
-                        },
-                        {
-                            $set: {
-                                status: "approved",
-                                updatedAt: now,
-                            },
-                        }
-                    );
-
-                if (
-                    withdrawalUpdate.modifiedCount !==
-                    1
-                ) {
-                    /*
-                    Rollback credits if withdrawal
-                    status could not be updated.
-                    */
-
-                    await usersCollection.updateOne(
-                        {
-                            _id: new ObjectId(
-                                withdrawal.creatorId
-                            ),
-                        },
-                        {
-                            $inc: {
-                                credits:
-                                    Number(
-                                        withdrawal.amount
-                                    ),
-                            },
-                        }
-                    );
-
-                    return res.status(500).json({
-                        message:
-                            "Failed to approve withdrawal.",
-                    });
-                }
-
-                return res.status(200).json({
-                    success: true,
-                    message:
-                        "Withdrawal approved successfully.",
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid withdrawal ID.",
                 });
-            } catch (error) {
-                console.error(
-                    "Approve withdrawal error:",
-                    error
+            }
+
+            const withdrawal =
+                await withdrawalsCollection.findOne({
+                    _id: new ObjectId(id),
+                });
+
+            if (!withdrawal) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Withdrawal not found.",
+                });
+            }
+
+            if (withdrawal.status !== "pending") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Only pending withdrawals can be approved.",
+                });
+            }
+
+            const now = new Date();
+
+            const withdrawalUpdate =
+                await withdrawalsCollection.updateOne(
+                    {
+                        _id: new ObjectId(id),
+                        status: "pending",
+                    },
+                    {
+                        $set: {
+                            status: "approved",
+                            updatedAt: now,
+                        },
+                    }
                 );
 
+            if (withdrawalUpdate.modifiedCount !== 1) {
                 return res.status(500).json({
+                    success: false,
                     message:
                         "Failed to approve withdrawal.",
                 });
             }
+
+            return res.status(200).json({
+                success: true,
+                message:
+                    "Withdrawal approved successfully.",
+            });
+        } catch (error) {
+            console.error(
+                "Approve withdrawal error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to approve withdrawal.",
+            });
         }
-    );
+    });
 
-    /*
-    ==========================================
-    REJECT WITHDRAWAL
-    PATCH /api/withdrawals/:id/reject
-    ADMIN
-    ==========================================
-    */
 
-    router.patch(
-        "/:id/reject",
-        async (req, res) => {
-            try {
-                const { id } = req.params;
+    router.patch("/:id/reject", async (req, res) => {
+        try {
+            const { id } = req.params;
 
-                if (!ObjectId.isValid(id)) {
-                    return res.status(400).json({
-                        message:
-                            "Invalid withdrawal ID.",
-                    });
-                }
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid withdrawal ID.",
+                });
+            }
 
-                const withdrawal =
-                    await withdrawalsCollection.findOne({
-                        _id: new ObjectId(id),
-                    });
+            const withdrawal =
+                await withdrawalsCollection.findOne({
+                    _id: new ObjectId(id),
+                });
 
-                if (!withdrawal) {
-                    return res.status(404).json({
-                        message:
-                            "Withdrawal not found.",
-                    });
-                }
+            if (!withdrawal) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Withdrawal not found.",
+                });
+            }
 
-                if (
-                    withdrawal.status !==
-                    "pending"
-                ) {
-                    return res.status(400).json({
-                        message:
-                            "Only pending withdrawals can be rejected.",
-                    });
-                }
+            if (withdrawal.status !== "pending") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Only pending withdrawals can be rejected.",
+                });
+            }
 
-                const now = new Date();
+            const now = new Date();
 
+            const result =
                 await withdrawalsCollection.updateOne(
                     {
                         _id: new ObjectId(id),
@@ -558,24 +485,32 @@ module.exports = (withdrawalsCollection, usersCollection) => {
                     }
                 );
 
-                return res.status(200).json({
-                    success: true,
-                    message:
-                        "Withdrawal rejected successfully.",
-                });
-            } catch (error) {
-                console.error(
-                    "Reject withdrawal error:",
-                    error
-                );
-
+            if (result.modifiedCount !== 1) {
                 return res.status(500).json({
+                    success: false,
                     message:
                         "Failed to reject withdrawal.",
                 });
             }
+
+            return res.status(200).json({
+                success: true,
+                message:
+                    "Withdrawal rejected successfully.",
+            });
+        } catch (error) {
+            console.error(
+                "Reject withdrawal error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to reject withdrawal.",
+            });
         }
-    );
+    });
 
     return router;
 };

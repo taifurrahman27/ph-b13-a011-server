@@ -345,33 +345,78 @@ module.exports = (campaignsCollection, usersCollection) => {
 
     router.get("/", async (req, res) => {
         try {
-            const campaigns =
-                await campaignsCollection
-                    .find({
-                        status: "approved",
-                    })
-                    .sort({
-                        createdAt: -1,
-                    })
-                    .toArray();
+            const campaigns = await campaignsCollection
+                .aggregate([
+                    {
+                        $match: {
+                            status: "approved",
+                        },
+                    },
+                    {
+                        $lookup: {
+                            from: "users",
+                            let: {
+                                creatorId: "$creatorId",
+                            },
+                            pipeline: [
+                                {
+                                    $match: {
+                                        $expr: {
+                                            $eq: [
+                                                "$_id",
+                                                {
+                                                    $convert: {
+                                                        input: "$$creatorId",
+                                                        to: "objectId",
+                                                        onError: null,
+                                                        onNull: null,
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    },
+                                },
+                                {
+                                    $project: {
+                                        _id: 1,
+                                        name: 1,
+                                        email: 1,
+                                        profileImage: 1,
+                                    },
+                                },
+                            ],
+                            as: "creator",
+                        },
+                    },
+                    {
+                        $unwind: {
+                            path: "$creator",
+                            preserveNullAndEmptyArrays: true,
+                        },
+                    },
+                    {
+                        $sort: {
+                            createdAt: -1,
+                        },
+                    },
+                ])
+                .toArray();
 
             return res.status(200).json({
                 success: true,
                 campaigns,
             });
         } catch (error) {
-            console.error(
-                "Get campaigns error:",
-                error
-            );
+            console.error("Get campaigns error:", error);
 
             return res.status(500).json({
                 success: false,
-                message:
-                    "Failed to fetch campaigns.",
+                message: "Failed to fetch campaigns.",
             });
         }
+
     });
+
 
 
     router.get("/:id", verifyToken, async (req, res) => {

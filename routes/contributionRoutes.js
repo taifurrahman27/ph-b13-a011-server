@@ -5,86 +5,318 @@ const verifyToken = require("../middleware/verifyToken");
 
 const router = express.Router();
 
+const CONTRIBUTION_CREDITS_PER_DOLLAR = 10;
+const WITHDRAWAL_CREDITS_PER_DOLLAR = 20;
+const isValidObjectId = (id) => ObjectId.isValid(id);
 
-router.get("/my-contributions", verifyToken, async (req, res) => {
+
+router.get(
+    "/creator/my-contributions",
+    verifyToken,
+    async (req, res) => {
+        try {
+            if (!req.user?.id || !isValidObjectId(req.user.id)) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid user authentication.",
+                });
+            }
+            if (
+                req.user.role &&
+                String(req.user.role).toLowerCase() !== "creator"
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Only creators can view contributions.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const contributionsCollection =
+                db.collection("contributions");
+
+            const campaignsCollection =
+                db.collection("campaigns");
+
+            const creatorId = String(req.user.id);
+
+            const campaigns = await campaignsCollection
+                .find({
+                    creatorId: creatorId,
+                })
+                .project({
+                    _id: 1,
+                    campaign_title: 1,
+                    campaign_image_url: 1,
+                    status: 1,
+                })
+                .toArray();
+
+            console.log("Creator ID:", creatorId);
+            console.log("Creator campaigns:", campaigns);
+
+            if (campaigns.length === 0) {
+                return res.status(200).json({
+                    success: true,
+                    contributions: [],
+                });
+            }
+
+            const campaignIds = campaigns.map(
+                (campaign) => campaign._id
+            );
+
+            console.log("Campaign IDs:", campaignIds);
+
+            const contributions = await contributionsCollection
+                .aggregate([
+                    {
+                        $match: {
+                            campaign_id: {
+                                $in: campaignIds,
+                            },
+                        },
+                    },
+
+                    {
+                        $lookup: {
+                            from: "campaigns",
+                            localField: "campaign_id",
+                            foreignField: "_id",
+                            as: "campaign",
+                        },
+                    },
+
+                    {
+                        $unwind: {
+                            path: "$campaign",
+                            preserveNullAndEmptyArrays: true,
+                        },
+                    },
+
+                    {
+                        $sort: {
+                            contribution_date: -1,
+                        },
+                    },
+
+                    {
+                        $project: {
+                            _id: 1,
+
+                            campaign_id: 1,
+
+                            supporter_id: 1,
+                            supporter_email: 1,
+                            supporter_name: 1,
+
+                            contribution_credit: 1,
+                            contribution_amount: 1,
+                            contribution_date: 1,
+
+                            status: 1,
+
+                            campaignTitle: {
+                                $ifNull: [
+                                    "$campaign.campaign_title",
+                                    "Campaign Unavailable",
+                                ],
+                            },
+
+                            campaignImage: {
+                                $ifNull: [
+                                    "$campaign.campaign_image_url",
+                                    "",
+                                ],
+                            },
+
+                            campaignStatus: "$campaign.status",
+
+                            campaignCreatorId: "$campaign.creatorId",
+                        },
+                    },
+                ])
+                .toArray();
+
+            console.log(
+                "Creator contributions:",
+                contributions
+            );
+
+            return res.status(200).json({
+                success: true,
+                contributions,
+            });
+        } catch (error) {
+            console.error(
+                "Get creator contributions error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: "Failed to fetch creator contributions.",
+            });
+        }
+    }
+
+);
+
+
+router.get("/supporter-summary", verifyToken, async (req, res) => {
     try {
+        if (!req.user?.id || !isValidObjectId(req.user.id)) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid user authentication.",
+            });
+        }
         const db = await connectDB();
+        const userId = new ObjectId(req.user.id);
+        const user = await db.collection("users").findOne(
+            {
+                _id: userId,
+            },
+            {
+                projection: {
+                    credits: 1,
+                },
+            }
+        );
 
-        const contributions = await db
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        const summary = await db
             .collection("contributions")
             .aggregate([
                 {
                     $match: {
-                        supporter_id: new ObjectId(req.user.id),
+                        supporter_id: userId,
                     },
                 },
                 {
-                    $lookup: {
-                        from: "campaigns",
-                        localField: "campaign_id",
-                        foreignField: "_id",
-                        as: "campaign",
-                    },
-                },
-                {
-                    $unwind: {
-                        path: "$campaign",
-                        preserveNullAndEmptyArrays: true,
-                    },
-                },
-                {
-                    $sort: {
-                        contribution_date: -1,
-                    },
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        campaign_id: 1,
-                        supporter_id: 1,
-                        supporter_email: 1,
-                        supporter_name: 1,
-                        contribution_credit: 1,
-                        contribution_amount: 1,
-                        contribution_date: 1,
-                        status: 1,
-                        campaignTitle: "$campaign.title",
-                        campaignImage: "$campaign.coverImage",
+                    $group: {
+                        _id: null,
+
+                        totalContributions: {
+                            $sum: 1,
+                        },
+
+                        pendingContributions: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $eq: [
+                                            {
+                                                $toLower: {
+                                                    $ifNull: [
+                                                        "$status",
+                                                        "",
+                                                    ],
+                                                },
+                                            },
+                                            "pending",
+                                        ],
+                                    },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+
+                        totalAmountContributed: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $eq: [
+                                            {
+                                                $toLower: {
+                                                    $ifNull: [
+                                                        "$status",
+                                                        "",
+                                                    ],
+                                                },
+                                            },
+                                            "approved",
+                                        ],
+                                    },
+                                    {
+                                        $convert: {
+                                            input: "$contribution_amount",
+                                            to: "double",
+                                            onError: 0,
+                                            onNull: 0,
+                                        },
+                                    },
+                                    0,
+                                ],
+                            },
+                        },
                     },
                 },
             ])
             .toArray();
 
-        res.status(200).json({
+        const data = summary[0] || {};
+
+        return res.status(200).json({
             success: true,
-            contributions,
+
+            totalContributions: Number(
+                data.totalContributions || 0
+            ),
+
+            pendingContributions: Number(
+                data.pendingContributions || 0
+            ),
+
+            totalAmountContributed: Number(
+                data.totalAmountContributed || 0
+            ),
+
+            availableCredits: Number(user.credits || 0),
         });
     } catch (error) {
-        console.error("Get my contributions error:", error);
+        console.error("Supporter dashboard summary error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            message: "Failed to fetch contributions.",
+            message: "Failed to load supporter dashboard summary.",
         });
     }
 });
 
-
 router.post("/", verifyToken, async (req, res) => {
     try {
+        if (!req.user?.id || !isValidObjectId(req.user.id)) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid user authentication.",
+            });
+        }
+
         const { campaignId, credits } = req.body;
 
         if (!campaignId) {
             return res.status(400).json({
+                success: false,
                 message: "Campaign ID is required.",
             });
         }
 
-        if (!ObjectId.isValid(campaignId)) {
+        if (!isValidObjectId(campaignId)) {
             return res.status(400).json({
+                success: false,
                 message: "Invalid campaign ID.",
             });
         }
+
 
         const contributionCredits = Number(credits);
 
@@ -94,7 +326,9 @@ router.post("/", verifyToken, async (req, res) => {
             !Number.isInteger(contributionCredits)
         ) {
             return res.status(400).json({
-                message: "Contribution credits must be a positive whole number.",
+                success: false,
+                message:
+                    "Contribution credits must be a positive whole number.",
             });
         }
 
@@ -102,48 +336,61 @@ router.post("/", verifyToken, async (req, res) => {
 
         const usersCollection = db.collection("users");
         const campaignsCollection = db.collection("campaigns");
-        const contributionsCollection = db.collection("contributions");
+        const contributionsCollection =
+            db.collection("contributions");
 
-        const userId = req.user.id;
-
-        if (!userId || !ObjectId.isValid(userId)) {
-            return res.status(401).json({
-                message: "Invalid user authentication.",
-            });
-        }
+        const userId = new ObjectId(req.user.id);
+        const campaignObjectId = new ObjectId(campaignId);
 
         const user = await usersCollection.findOne({
-            _id: new ObjectId(userId),
+            _id: userId,
         });
 
         if (!user) {
             return res.status(404).json({
+                success: false,
                 message: "User not found.",
             });
         }
 
         if (user.role !== "supporter") {
             return res.status(403).json({
-                message: "Only supporters can contribute to campaigns.",
+                success: false,
+                message:
+                    "Only supporters can contribute to campaigns.",
             });
         }
 
         const campaign = await campaignsCollection.findOne({
-            _id: new ObjectId(campaignId),
+            _id: campaignObjectId,
         });
 
         if (!campaign) {
             return res.status(404).json({
+                success: false,
                 message: "Campaign not found.",
             });
         }
 
         if (
             campaign.status &&
-            campaign.status.toLowerCase() !== "approved"
+            String(campaign.status).toLowerCase() !== "approved"
         ) {
             return res.status(400).json({
-                message: "This campaign is not currently approved.",
+                success: false,
+                message:
+                    "This campaign is not currently approved.",
+            });
+        }
+
+        if (
+            campaign.creator_id &&
+            String(campaign.creator_id) === String(userId)
+        ) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "You cannot contribute to your own campaign.",
             });
         }
 
@@ -156,6 +403,7 @@ router.post("/", verifyToken, async (req, res) => {
             contributionCredits < minimumContribution
         ) {
             return res.status(400).json({
+                success: false,
                 message: `Minimum contribution is ${minimumContribution} credits.`,
             });
         }
@@ -164,40 +412,35 @@ router.post("/", verifyToken, async (req, res) => {
 
         if (availableCredits < contributionCredits) {
             return res.status(400).json({
+                success: false,
                 message: `Insufficient credits. You have ${availableCredits} credits available.`,
             });
         }
 
-        const newUserCredits =
-            availableCredits - contributionCredits;
-
-        const oldRaisedCredits = Number(
-            campaign.total_contributed || 0
-        );
-
-        const newRaisedCredits =
-            oldRaisedCredits + contributionCredits;
-
-        const fundingGoal = Number(campaign.funding_goal || 0);
-
         const contributionAmount =
-            contributionCredits / 10;
+            contributionCredits;
 
         const contribution = {
-            campaign_id: new ObjectId(campaignId),
-            supporter_id: new ObjectId(userId),
+            campaign_id: campaignObjectId,
+
+            supporter_id: userId,
             supporter_email: user.email,
             supporter_name: user.name,
+
             contribution_credit: contributionCredits,
             contribution_amount: contributionAmount,
+
             contribution_date: new Date(),
-            status: "completed",
+
+            status: "pending",
         };
 
         const userUpdate = await usersCollection.updateOne(
             {
-                _id: new ObjectId(userId),
-                credits: { $gte: contributionCredits },
+                _id: userId,
+                credits: {
+                    $gte: contributionCredits,
+                },
             },
             {
                 $inc: {
@@ -208,30 +451,23 @@ router.post("/", verifyToken, async (req, res) => {
 
         if (userUpdate.modifiedCount !== 1) {
             return res.status(400).json({
-                message: "Unable to deduct credits. Please try again.",
+                success: false,
+                message:
+                    "Unable to deduct credits. Please try again.",
             });
         }
 
         try {
-            await campaignsCollection.updateOne(
-                {
-                    _id: new ObjectId(campaignId),
-                },
-                {
-                    $inc: {
-                        total_contributed: contributionCredits,
-                    },
-                    $set: {
-                        updatedAt: new Date(),
-                    },
-                }
-            );
+            const result =
+                await contributionsCollection.insertOne(
+                    contribution
+                );
 
-            await contributionsCollection.insertOne(contribution);
+            contribution._id = result.insertedId;
         } catch (databaseError) {
             await usersCollection.updateOne(
                 {
-                    _id: new ObjectId(userId),
+                    _id: userId,
                 },
                 {
                     $inc: {
@@ -243,42 +479,40 @@ router.post("/", verifyToken, async (req, res) => {
             throw databaseError;
         }
 
-        const updatedCampaign = await campaignsCollection.findOne({
-            _id: new ObjectId(campaignId),
-        });
-
-        const finalRaisedCredits = Number(
-            updatedCampaign?.total_contributed || newRaisedCredits
+        const updatedUser = await usersCollection.findOne(
+            {
+                _id: userId,
+            },
+            {
+                projection: {
+                    credits: 1,
+                },
+            }
         );
 
-        const raisedAmount = finalRaisedCredits / 10;
-
-        const progress =
-            fundingGoal > 0
-                ? Math.min(
-                    (raisedAmount / fundingGoal) * 100,
-                    100
-                )
-                : 0;
-
         return res.status(201).json({
-            message: "Contribution submitted successfully.",
+            success: true,
+
+            message:
+                "Contribution submitted successfully and is awaiting approval.",
+
             contribution: {
+                _id: contribution._id,
                 campaignId,
                 credits: contributionCredits,
                 amount: contributionAmount,
+                status: "pending",
             },
-            remainingCredits: newUserCredits,
-            campaign: {
-                raisedCredits: finalRaisedCredits,
-                raisedAmount,
-                progress,
-            },
+
+            remainingCredits: Number(
+                updatedUser?.credits || 0
+            ),
         });
     } catch (error) {
         console.error("Contribution error:", error);
 
         return res.status(500).json({
+            success: false,
             message: "Failed to process contribution.",
             error:
                 process.env.NODE_ENV === "development"
@@ -289,38 +523,543 @@ router.post("/", verifyToken, async (req, res) => {
 });
 
 
+router.patch("/:contributionId/approve", verifyToken, async (req, res) => {
+    try {
+        const { contributionId } = req.params;
+
+        if (!isValidObjectId(contributionId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid contribution ID.",
+            });
+        }
+
+        if (!req.user?.id || !isValidObjectId(req.user.id)) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid user authentication.",
+            });
+        }
+
+        const db = await connectDB();
+
+        const contribution = await db
+            .collection("contributions")
+            .findOne({
+                _id: new ObjectId(contributionId),
+            });
+
+        if (!contribution) {
+            return res.status(404).json({
+                success: false,
+                message: "Contribution not found.",
+            });
+        }
+
+        if (
+            String(contribution.status || "").toLowerCase() !==
+            "pending"
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Only pending contributions can be approved.",
+            });
+        }
+
+        const campaign = await db
+            .collection("campaigns")
+            .findOne({
+                _id: new ObjectId(contribution.campaign_id),
+            });
+
+        if (!campaign) {
+            return res.status(404).json({
+                success: false,
+                message: "Campaign not found.",
+            });
+        }
+
+        if (
+            String(campaign.creatorId) !==
+            String(req.user.id)
+        ) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "You are not authorized to approve this contribution.",
+            });
+        }
+
+        const contributionResult = await db
+            .collection("contributions")
+            .updateOne(
+                {
+                    _id: new ObjectId(contributionId),
+                    status: "pending",
+                },
+                {
+                    $set: {
+                        status: "approved",
+                        approvedAt: new Date(),
+                    },
+                }
+            );
+
+        if (contributionResult.modifiedCount === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Contribution could not be approved.",
+            });
+        }
+
+        await db
+            .collection("campaigns")
+            .updateOne(
+                {
+                    _id: new ObjectId(contribution.campaign_id),
+                },
+                {
+                    $inc: {
+                        total_contributed: Number(
+                            contribution.contribution_credit || 0
+                        ),
+                    },
+                    $set: {
+                        updatedAt: new Date(),
+                    },
+                }
+            );
+
+        return res.status(200).json({
+            success: true,
+            message: "Contribution approved successfully.",
+        });
+    } catch (error) {
+        console.error(
+            "Approve contribution error:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to approve contribution.",
+        });
+    }
+});
+
+
+
+router.patch(
+    "/:contributionId/reject",
+    verifyToken,
+    async (req, res) => {
+        try {
+            if (!req.user?.id || !isValidObjectId(req.user.id)) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid user authentication.",
+                });
+            }
+
+            if (
+                req.user.role &&
+                String(req.user.role).toLowerCase() !== "creator"
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Only creators can reject contributions.",
+                });
+            }
+
+            const { contributionId } = req.params;
+
+            if (!isValidObjectId(contributionId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid contribution ID.",
+                });
+            }
+
+            const db = await connectDB();
+
+            const contributionsCollection =
+                db.collection("contributions");
+
+            const campaignsCollection =
+                db.collection("campaigns");
+
+            const usersCollection =
+                db.collection("users");
+
+            const contributionObjectId =
+                new ObjectId(contributionId);
+
+            const creatorObjectId =
+                new ObjectId(req.user.id);
+
+            const contribution =
+                await contributionsCollection.findOne({
+                    _id: contributionObjectId,
+                });
+
+            if (!contribution) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Contribution not found.",
+                });
+            }
+
+            const contributionStatus =
+                String(
+                    contribution.status || ""
+                ).toLowerCase();
+
+            if (contributionStatus !== "pending") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Only pending contributions can be rejected.",
+                });
+            }
+
+            const contributionCredits = Number(
+                contribution.contribution_credit
+            );
+
+            if (
+                !Number.isFinite(contributionCredits) ||
+                contributionCredits <= 0 ||
+                !Number.isInteger(contributionCredits)
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid contribution credit amount.",
+                });
+            }
+
+            if (
+                !contribution.supporter_id ||
+                !ObjectId.isValid(contribution.supporter_id)
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid supporter information.",
+                });
+            }
+
+            const supporterObjectId =
+                new ObjectId(contribution.supporter_id);
+
+
+            const campaignId = contribution.campaign_id;
+
+            if (!campaignId || !ObjectId.isValid(campaignId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid campaign ID.",
+                });
+            }
+
+            const campaign =
+                await campaignsCollection.findOne({
+                    _id: new ObjectId(campaignId),
+                });
+
+            if (!campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Campaign not found.",
+                });
+            }
+
+            const campaignCreatorId =
+                campaign.creatorId ||
+                campaign.creator_id;
+
+            if (
+                !campaignCreatorId ||
+                String(campaignCreatorId) !==
+                String(req.user.id)
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You are not authorized to reject this contribution.",
+                });
+            }
+
+            const contributionUpdate =
+                await contributionsCollection.updateOne(
+                    {
+                        _id: contributionObjectId,
+                        status: "pending",
+                    },
+                    {
+                        $set: {
+                            status: "rejected",
+                            rejected_at: new Date(),
+                            rejected_by: creatorObjectId,
+                        },
+                    }
+                );
+
+            if (contributionUpdate.modifiedCount !== 1) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Contribution was already processed. Please refresh and try again.",
+                });
+            }
+
+            try {
+                const creditRestore =
+                    await usersCollection.updateOne(
+                        {
+                            _id: supporterObjectId,
+                            role: "supporter",
+                        },
+                        {
+                            $inc: {
+                                credits: contributionCredits,
+                            },
+                        }
+                    );
+
+                if (creditRestore.modifiedCount !== 1) {
+                    throw new Error(
+                        "Unable to restore supporter credits."
+                    );
+                }
+            } catch (refundError) {
+                await contributionsCollection.updateOne(
+                    {
+                        _id: contributionObjectId,
+                        status: "rejected",
+                    },
+                    {
+                        $set: {
+                            status: "pending",
+                        },
+                        $unset: {
+                            rejected_at: "",
+                            rejected_by: "",
+                        },
+                    }
+                );
+
+                throw refundError;
+            }
+
+            const updatedSupporter =
+                await usersCollection.findOne(
+                    {
+                        _id: supporterObjectId,
+                    },
+                    {
+                        projection: {
+                            credits: 1,
+                        },
+                    }
+                );
+
+            const supporterRemainingCredits =
+                Number(
+                    updatedSupporter?.credits || 0
+                );
+
+            return res.status(200).json({
+                success: true,
+                message:
+                    "Contribution rejected and credits returned to the supporter.",
+
+                contribution: {
+                    _id: contributionObjectId,
+                    status: "rejected",
+                    credits: contributionCredits,
+                    refundedCredits: contributionCredits,
+                },
+
+                supporter: {
+                    _id: supporterObjectId,
+                    credits: supporterRemainingCredits,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Reject contribution error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to reject contribution.",
+
+                error:
+                    process.env.NODE_ENV === "development"
+                        ? error.message
+                        : undefined,
+            });
+        }
+    }
+);
+
 router.get("/campaign/:campaignId", async (req, res) => {
     try {
         const { campaignId } = req.params;
 
-        if (!ObjectId.isValid(campaignId)) {
+        if (!isValidObjectId(campaignId)) {
             return res.status(400).json({
+                success: false,
                 message: "Invalid campaign ID.",
             });
         }
 
         const db = await connectDB();
 
-        const contributionsCollection =
-            db.collection("contributions");
+        const contributions =
+            await db
+                .collection("contributions")
+                .aggregate([
+                    {
+                        $match: {
+                            campaign_id:
+                                new ObjectId(campaignId),
+                        },
+                    },
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "supporter_id",
+                            foreignField: "_id",
+                            as: "supporter",
+                        },
+                    },
+                    {
+                        $unwind: {
+                            path: "$supporter",
+                            preserveNullAndEmptyArrays: true,
+                        },
+                    },
+                    {
+                        $sort: {
+                            contribution_date: -1,
+                        },
+                    },
+                    {
+                        $project: {
+                            _id: 1,
 
-        const contributions = await contributionsCollection
-            .find({
-                campaign_id: new ObjectId(campaignId),
-            })
-            .sort({
-                contribution_date: -1,
-            })
-            .toArray();
+                            campaign_id: 1,
+
+                            supporter_id: 1,
+                            supporter_name: 1,
+                            supporter_email: 1,
+
+                            contribution_credit: 1,
+                            contribution_amount: 1,
+
+                            contribution_date: 1,
+                            status: 1,
+
+                            supporterImage:
+                                "$supporter.profileImage",
+                        },
+                    },
+                ])
+                .toArray();
 
         return res.status(200).json({
+            success: true,
             contributions,
         });
     } catch (error) {
-        console.error("Get contributions error:", error);
+        console.error(
+            "Get campaign contributions error:",
+            error
+        );
 
         return res.status(500).json({
-            message: "Failed to load contributions.",
+            success: false,
+            message:
+                "Failed to load contributions.",
+        });
+    }
+});
+
+router.get("/creator/my-contributions", verifyToken, async (req, res) => {
+    try {
+        if (!req.user?.id || !isValidObjectId(req.user.id)) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid user authentication.",
+            });
+        }
+        const db = await connectDB();
+        const creatorId = new ObjectId(req.user.id);
+        const contributions =
+            await db
+                .collection("contributions")
+                .aggregate([
+                    {
+                        $lookup: {
+                            from: "campaigns",
+                            localField: "campaign_id",
+                            foreignField: "_id",
+                            as: "campaign",
+                        },
+                    },
+                    {
+                        $unwind: "$campaign",
+                    },
+                    {
+                        $match: {
+                            "campaign.creator_id": creatorId,
+                        },
+                    },
+                    {
+                        $sort: {
+                            contribution_date: -1,
+                        },
+                    },
+                    {
+                        $project: {
+                            _id: 1,
+
+                            campaign_id: 1,
+                            campaignTitle:
+                                "$campaign.title",
+
+                            supporter_id: 1,
+                            supporter_name: 1,
+                            supporter_email: 1,
+
+                            contribution_credit: 1,
+                            contribution_amount: 1,
+
+                            contribution_date: 1,
+                            status: 1,
+                        },
+                    },
+                ])
+                .toArray();
+
+        return res.status(200).json({
+            success: true,
+            contributions,
+        });
+    } catch (error) {
+        console.error(
+            "Get creator contributions error:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Failed to load creator contributions.",
         });
     }
 });
