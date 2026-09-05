@@ -7,11 +7,21 @@ const router = express.Router();
 
 const CONTRIBUTION_CREDITS_PER_DOLLAR = 10;
 const WITHDRAWAL_CREDITS_PER_DOLLAR = 20;
+
 const isValidObjectId = (id) => ObjectId.isValid(id);
+
+const getCollections = async () => {
+    const db = await connectDB();
+
+    return {
+        contributionsCollection: db.collection("contributions"),
+        campaignsCollection: db.collection("campaigns"),
+    };
+};
 
 
 router.get(
-    "/creator/my-contributions",
+    "/my-contributions",
     verifyToken,
     async (req, res) => {
         try {
@@ -21,60 +31,44 @@ router.get(
                     message: "Invalid user authentication.",
                 });
             }
-            if (
-                req.user.role &&
-                String(req.user.role).toLowerCase() !== "creator"
-            ) {
-                return res.status(403).json({
-                    success: false,
-                    message: "Only creators can view contributions.",
+
+            const {
+                contributionsCollection,
+            } = await getCollections();
+
+            const supporterId = String(req.user.id);
+
+            console.log("Supporter ID:", supporterId);
+
+            const supporterMatch = [
+                {
+                    supporter_id: supporterId,
+                },
+            ];
+
+            if (isValidObjectId(req.user.id)) {
+                supporterMatch.push({
+                    supporter_id: new ObjectId(req.user.id),
                 });
             }
-
-            const db = await connectDB();
-
-            const contributionsCollection =
-                db.collection("contributions");
-
-            const campaignsCollection =
-                db.collection("campaigns");
-
-            const creatorId = String(req.user.id);
-
-            const campaigns = await campaignsCollection
-                .find({
-                    creatorId: creatorId,
-                })
-                .project({
-                    _id: 1,
-                    campaign_title: 1,
-                    campaign_image_url: 1,
-                    status: 1,
-                })
-                .toArray();
-
-            console.log("Creator ID:", creatorId);
-            console.log("Creator campaigns:", campaigns);
-
-            if (campaigns.length === 0) {
-                return res.status(200).json({
-                    success: true,
-                    contributions: [],
-                });
-            }
-
-            const campaignIds = campaigns.map(
-                (campaign) => campaign._id
-            );
-
-            console.log("Campaign IDs:", campaignIds);
 
             const contributions = await contributionsCollection
                 .aggregate([
                     {
                         $match: {
-                            campaign_id: {
-                                $in: campaignIds,
+                            $or: supporterMatch,
+                        },
+                    },
+
+                    {
+                        $addFields: {
+                            campaignObjectId: {
+                                $convert: {
+                                    input: "$campaign_id",
+                                    to: "objectId",
+                                    onError: null,
+                                    onNull: null,
+                                },
                             },
                         },
                     },
@@ -82,7 +76,7 @@ router.get(
                     {
                         $lookup: {
                             from: "campaigns",
-                            localField: "campaign_id",
+                            localField: "campaignObjectId",
                             foreignField: "_id",
                             as: "campaign",
                         },
@@ -104,17 +98,13 @@ router.get(
                     {
                         $project: {
                             _id: 1,
-
                             campaign_id: 1,
-
                             supporter_id: 1,
                             supporter_email: 1,
                             supporter_name: 1,
-
                             contribution_credit: 1,
                             contribution_amount: 1,
                             contribution_date: 1,
-
                             status: 1,
 
                             campaignTitle: {
@@ -132,7 +122,6 @@ router.get(
                             },
 
                             campaignStatus: "$campaign.status",
-
                             campaignCreatorId: "$campaign.creatorId",
                         },
                     },
@@ -140,7 +129,7 @@ router.get(
                 .toArray();
 
             console.log(
-                "Creator contributions:",
+                "Supporter contributions:",
                 contributions
             );
 
@@ -150,18 +139,18 @@ router.get(
             });
         } catch (error) {
             console.error(
-                "Get creator contributions error:",
+                "Get supporter contributions error:",
                 error
             );
 
             return res.status(500).json({
                 success: false,
-                message: "Failed to fetch creator contributions.",
+                message: "Failed to fetch supporter contributions.",
             });
         }
     }
-
 );
+
 
 
 router.get("/supporter-summary", verifyToken, async (req, res) => {
@@ -518,6 +507,77 @@ router.post("/", verifyToken, async (req, res) => {
                 process.env.NODE_ENV === "development"
                     ? error.message
                     : undefined,
+        });
+    }
+});
+
+
+router.get("/my-contributions", verifyToken, async (req, res) => {
+    try {
+        const supporterId = req.user?.id;
+
+        if (!supporterId || !ObjectId.isValid(supporterId)) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid supporter authentication.",
+            });
+        }
+
+        const contributions = await contributionsCollection
+            .aggregate([
+                {
+                    $match: {
+                        supporter_id: new ObjectId(supporterId),
+                    },
+                },
+                {
+                    $lookup: {
+                        from: "campaigns",
+                        localField: "campaign_id",
+                        foreignField: "_id",
+                        as: "campaign",
+                    },
+                },
+                {
+                    $unwind: {
+                        path: "$campaign",
+                        preserveNullAndEmptyArrays: true,
+                    },
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        campaign_id: 1,
+                        supporter_id: 1,
+                        supporter_email: 1,
+                        supporter_name: 1,
+                        contribution_credit: 1,
+                        contribution_amount: 1,
+                        contribution_date: 1,
+                        status: 1,
+                        approvedAt: 1,
+                        campaignTitle: "$campaign.campaign_title",
+                        campaignImage: "$campaign.campaign_image_url",
+                    },
+                },
+                {
+                    $sort: {
+                        contribution_date: -1,
+                    },
+                },
+            ])
+            .toArray();
+
+        return res.status(200).json({
+            success: true,
+            contributions,
+        });
+    } catch (error) {
+        console.error("Get supporter contributions error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch contributions.",
         });
     }
 });
