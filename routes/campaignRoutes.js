@@ -417,6 +417,39 @@ module.exports = (campaignsCollection, usersCollection) => {
 
     });
 
+    router.get("/top-funded", async (req, res) => {
+        try {
+            const campaigns = await campaignsCollection
+                .find({
+                    status: "approved",
+                })
+                .sort({
+                    total_contributed: -1,
+                })
+                .limit(6)
+                .project({
+                    _id: 1,
+                    campaign_title: 1,
+                    campaign_image_url: 1,
+                    total_contributed: 1,
+                })
+                .toArray();
+
+            console.log("Top funded campaigns:", campaigns);
+
+            return res.status(200).json({
+                success: true,
+                campaigns,
+            });
+        } catch (error) {
+            console.error("Get top funded campaigns error:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: "Failed to fetch top funded campaigns.",
+            });
+        }
+    });
 
 
     router.get("/:id", verifyToken, async (req, res) => {
