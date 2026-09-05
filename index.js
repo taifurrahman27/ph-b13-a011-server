@@ -3,7 +3,6 @@ const cors = require("cors");
 require("dotenv").config();
 
 const connectDB = require("./utils/db");
-
 const authRoutes = require("./routes/authRoutes");
 const campaignRoutes = require("./routes/campaignRoutes");
 const withdrawalRoutes = require("./routes/withdrawalRoutes");
@@ -17,9 +16,22 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = [
+    "http://localhost:3000",
+    process.env.CLIENT_URL,
+    process.env.BETTER_AUTH_URL,
+    "https://ph-b13-a011-bebpmv0i2-taifurrahman27s-projects.vercel.app",
+].filter(Boolean);
+
 app.use(
     cors({
-        origin: process.env.BETTER_AUTH_URL,
+        origin: function (origin, callback) {
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error("Not allowed by CORS"));
+            }
+        },
         credentials: true,
     })
 );
@@ -35,8 +47,7 @@ const startServer = async () => {
         const usersCollection = db.collection("users");
         const campaignsCollection = db.collection("campaigns");
         const withdrawalsCollection = db.collection("withdrawals");
-        const contributionsCollection =
-            db.collection("contributions");
+        const contributionsCollection = db.collection("contributions");
         const paymentsCollection = db.collection("payments");
 
         app.use("/api/auth", authRoutes);
